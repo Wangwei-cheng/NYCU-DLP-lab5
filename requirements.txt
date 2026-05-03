@@ -1,0 +1,6 @@
+wandb
+gymnasium==1.1.1
+torch
+numpy
+opencv-python
+ale_py>=0.10.0
