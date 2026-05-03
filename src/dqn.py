@@ -17,6 +17,7 @@ from collections import deque
 import wandb
 import argparse
 import time
+import shutil
 
 gym.register_envs(ale_py)
 
@@ -180,6 +181,9 @@ class DQNAgent:
 
         self.memory = deque(maxlen=args.memory_size)
 
+        if self.task == 3:
+            self.snapshot_steps = [600000, 1000000, 1500000, 2000000, 2500000]
+
     def select_action(self, state):
         if random.random() < self.epsilon:
             return random.randint(0, self.num_actions - 1)
@@ -191,7 +195,6 @@ class DQNAgent:
     def run(self, episodes=1000):
         for ep in range(episodes):
             obs, _ = self.env.reset()
-
             state = self.preprocessor.reset(obs) if self.preprocessor else obs
             done = False
             total_reward = 0
@@ -212,6 +215,15 @@ class DQNAgent:
                 total_reward += reward
                 self.env_count += 1
                 step_count += 1
+
+                if self.task == 3 and self.env_count in self.snapshot_steps:
+                    model_path = os.path.join(self.save_dir, "best_model.pt")
+                    if os.path.exists(model_path):
+                        shutil.copy(model_path, os.path.join(self.save_dir, f"snapshot_{self.env_count}.pt"))
+                        print(f"[Snapshot] copy the current best model to snapshot_{self.env_count}.pt")
+                    else:
+                        print(f"[Snapshot] No best model found at {model_path} to snapshot at step {self.env_count}.")
+
 
                 if self.env_count % 1000 == 0:                 
                     print(f"[Collect] Ep: {ep} Step: {step_count} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
@@ -339,8 +351,27 @@ if __name__ == "__main__":
     parser.add_argument("--train-per-step", type=int, default=1)
 
     parser.add_argument("--task", type=int, choices=[1, 2, 3], default=1)
+    parser.add_argument("--total-steps", type=int, default=3000000)
     args = parser.parse_args()
 
-    wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
+    if args.task == 1:
+        parser.set_defaults(
+            wandb_run_name="task1",
+            wandb_project_name="DLP-Lab5-DQN-CartPole"
+        )
+    elif args.task == 2:
+        parser.set_defaults(
+            wandb_run_name="task2",
+            wandb_project_name="DLP-Lab5-DQN-Pong"
+        )
+    elif args.task == 3:
+        parser.set_defaults(
+            wandb_run_name="task3",
+            wandb_project_name="DLP-Lab5-task3"
+        )
+
+    args = parser.parse_args()
+
+    wandb.init(project=args.wandb_project_name, name=args.wandb_run_name, save_code=True)
     agent = DQNAgent(args=args)
     agent.run()

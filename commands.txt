@@ -1,0 +1,17 @@
+# ==== For task 1 ====
+python src/dqn.py --task 1 --save-dir ./results_task1 \
+--lr 0.001 --memory-size 10000 \
+--replay-start-size 1000 --target-update-frequency 100 \
+--epsilon-decay 0.999
+
+# ==== For task 2 ====
+python src/dqn.py --task 2 --save-dir ./results_task2 \
+--lr 0.0001 --memory-size 100000 \
+--replay-start-size 10000 --target-update-frequency 1000 \
+--epsilon-decay 0.99999
+
+# ==== For task 3 ====
+python src/dqn.py --task 3 --save-dir ./results_task3 \
+--lr 0.0001 --memory-size 100000 \
+--replay-start-size 10000 --target-update-frequency 2000 \
+--epsilon-decay 0.99998
