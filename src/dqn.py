@@ -117,17 +117,34 @@ class PrioritizedReplayBuffer:
 
     def add(self, transition, error):
         ########## YOUR CODE HERE (for Task 3) ########## 
-                    
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(transition)
+        else:
+            self.buffer[self.pos] = transition
+
+        self.priorities[self.pos] = abs(error) + 1e-6
+        self.pos = (self.pos + 1) % self.capacity
         ########## END OF YOUR CODE (for Task 3) ########## 
         return 
     def sample(self, batch_size):
         ########## YOUR CODE HERE (for Task 3) ########## 
-                    
+        curr_len = len(self.buffer)
+        prios = self.priorities[:curr_len]
+
+        probs = prios ** self.alpha
+        probs /= probs.sum()
+
+        indices = np.random.choice(curr_len, batch_size, p=probs)
+        samples = [self.buffer[idx] for idx in indices]
+
+        weights = (curr_len * probs[indices]) ** (-self.beta)
+        weights /= weights.max()
         ########## END OF YOUR CODE (for Task 3) ########## 
-        return
+        return samples, indices, weights.astype(np.float32)
+
     def update_priorities(self, indices, errors):
         ########## YOUR CODE HERE (for Task 3) ########## 
-                    
+        self.priorities[indices] = abs(errors) + 1e-6
         ########## END OF YOUR CODE (for Task 3) ########## 
         return
         
@@ -153,9 +170,16 @@ class DQNAgent:
             self.preprocessor = AtariPreprocessor()
             obs_shape = (4, 84, 84)
 
+        if self.task == 3:
+            self.memory = PrioritizedReplayBuffer(capacity=args.memory_size)
+        else:
+            self.memory = deque(maxlen=args.memory_size)
+
+        if self.task == 3:
+            self.snapshot_steps = [600000, 1000000, 1500000, 2000000, 2500000]
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
-
 
         self.q_net = DQN(obs_shape, self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
@@ -179,11 +203,6 @@ class DQNAgent:
         self.save_dir = args.save_dir
         os.makedirs(self.save_dir, exist_ok=True)
 
-        self.memory = deque(maxlen=args.memory_size)
-
-        if self.task == 3:
-            self.snapshot_steps = [600000, 1000000, 1500000, 2000000, 2500000]
-
     def select_action(self, state):
         if random.random() < self.epsilon:
             return random.randint(0, self.num_actions - 1)
@@ -206,7 +225,12 @@ class DQNAgent:
                 done = terminated or truncated
                 
                 next_state = self.preprocessor.step(next_obs) if self.preprocessor else next_obs
-                self.memory.append((state, action, reward, next_state, done))
+                
+                if self.task == 3:
+                    max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
+                    self.memory.add((state, action, reward, next_state, done), max_p)
+                else:
+                    self.memory.append((state, action, reward, next_state, done))
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -299,8 +323,13 @@ class DQNAgent:
        
         ########## YOUR CODE HERE (<5 lines) ##########
         # Sample a mini-batch of (s,a,r,s',done) from the replay buffer
-        batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        if self.task == 3:
+            minibatch, indices, weights = self.memory.sample(self.batch_size)
+            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+        else:
+            minibatch = random.sample(self.memory, self.batch_size)
+
+        states, actions, rewards, next_states, dones = zip(*minibatch)
         ########## END OF YOUR CODE ##########
 
         # Convert the states, actions, rewards, next_states, and dones into torch tensors
@@ -315,10 +344,23 @@ class DQNAgent:
         ########## YOUR CODE HERE (~10 lines) ##########
         # Implement the loss function of DQN and the gradient updates 
         with torch.no_grad():
-            next_q_values = self.target_net(next_states).max(dim=1)[0]
+            if self.task == 3:
+                # DDQN
+                best_next_actions = self.q_net(next_states).argmax(dim=1)
+                next_q_values = self.target_net(next_states).gather(1, best_next_actions.unsqueeze(1)).squeeze(1)
+            else:
+                # DQN
+                next_q_values = self.target_net(next_states).max(dim=1)[0]
+
             target_q_values = rewards + self.gamma * next_q_values * (1 - dones)
 
-        loss = F.mse_loss(q_values, target_q_values)
+        if self.task == 3:
+            td_errors = (target_q_values - q_values).detach().cpu().numpy()
+            self.memory.update_priorities(indices, td_errors)
+
+            loss = (weights * F.mse_loss(q_values, target_q_values, reduction='none')).mean()
+        else:
+            loss = F.mse_loss(q_values, target_q_values)
         
         self.optimizer.zero_grad()
         loss.backward()
