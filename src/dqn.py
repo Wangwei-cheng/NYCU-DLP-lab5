@@ -178,6 +178,9 @@ class DQNAgent:
         if self.task == 3:
             self.snapshot_steps = [600000, 1000000, 1500000, 2000000, 2500000]
 
+        self.n_step = args.n_steps
+        self.n_step_buffer = deque(maxlen=self.n_step)
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
@@ -223,14 +226,37 @@ class DQNAgent:
                 action = self.select_action(state)
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
-                
                 next_state = self.preprocessor.step(next_obs) if self.preprocessor else next_obs
                 
-                if self.task == 3:
-                    max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
-                    self.memory.add((state, action, reward, next_state, done), max_p)
-                else:
-                    self.memory.append((state, action, reward, next_state, done))
+                self.n_step_buffer.append((state, action, reward, next_state, done))
+
+                if len(self.n_step_buffer) == self.n_step:
+                    origin_state, origin_action, _, _, _ = self.n_step_buffer[0]
+                    _, _, _, final_next_state, final_done = self.n_step_buffer[-1]
+
+                    n_step_reward = sum([self.n_step_buffer[i][2] * (self.gamma ** i) for i in range(len(self.n_step_buffer))])
+
+                    if self.task == 3:
+                        max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
+                        self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done), max_p)
+                    else:
+                        self.memory.append((origin_state, origin_action, n_step_reward, final_next_state, final_done))
+
+                if done:
+                    while len(self.n_step_buffer) > 0:
+                        self.n_step_buffer.popleft()
+                        if len(self.n_step_buffer) > 0:
+                            origin_state, origin_action, _, _, _ = self.n_step_buffer[0]
+                            _, _, _, final_next_state, final_done = self.n_step_buffer[-1]
+
+                            remain_len = len(self.n_step_buffer)
+                            n_step_reward = sum([self.n_step_buffer[i][2] * (self.gamma ** i) for i in range(remain_len)])
+
+                            if self.task == 3:
+                                max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
+                                self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done), max_p)
+                            else:
+                                self.memory.append((origin_state, origin_action, n_step_reward, final_next_state, final_done))
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -352,7 +378,7 @@ class DQNAgent:
                 # DQN
                 next_q_values = self.target_net(next_states).max(dim=1)[0]
 
-            target_q_values = rewards + self.gamma * next_q_values * (1 - dones)
+            target_q_values = rewards + (self.gamma ** self.n_step) * next_q_values * (1 - dones)
 
         if self.task == 3:
             td_errors = (target_q_values - q_values).detach().cpu().numpy()
@@ -393,7 +419,7 @@ if __name__ == "__main__":
     parser.add_argument("--train-per-step", type=int, default=1)
 
     parser.add_argument("--task", type=int, choices=[1, 2, 3], default=1)
-    parser.add_argument("--total-steps", type=int, default=3000000)
+    parser.add_argument("--n-steps", type=int, default=1)
     args = parser.parse_args()
 
     if args.task == 1:
