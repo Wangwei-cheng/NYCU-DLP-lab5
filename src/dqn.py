@@ -147,6 +147,9 @@ class PrioritizedReplayBuffer:
         self.priorities[indices] = abs(errors) + 1e-6
         ########## END OF YOUR CODE (for Task 3) ########## 
         return
+    
+    def __len__(self):
+        return len(self.buffer)
         
 
 class DQNAgent:
