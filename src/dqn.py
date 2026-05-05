@@ -107,27 +107,34 @@ class PrioritizedReplayBuffer:
         Prioritizing the samples in the replay memory by the Bellman error
         See the paper (Schaul et al., 2016) at https://arxiv.org/abs/1511.05952
     """ 
-    def __init__(self, capacity, alpha=0.6, beta=0.4):
+    def __init__(self, capacity, alpha=0.6, beta_start=0.4, beta_frames=1000000):
         self.capacity = capacity
         self.alpha = alpha
-        self.beta = beta
+        self.beta_start = beta_start
+        self.beta_frames = beta_frames
         self.buffer = []
         self.priorities = np.zeros((capacity,), dtype=np.float32)
         self.pos = 0
+        self.frame = 1
+        self.max_priority = 1.0
 
-    def add(self, transition, error):
+    def add(self, transition):
         ########## YOUR CODE HERE (for Task 3) ########## 
         if len(self.buffer) < self.capacity:
             self.buffer.append(transition)
         else:
             self.buffer[self.pos] = transition
 
-        self.priorities[self.pos] = abs(error) + 1e-6
+        self.priorities[self.pos] = self.max_priority
         self.pos = (self.pos + 1) % self.capacity
         ########## END OF YOUR CODE (for Task 3) ########## 
         return 
+    
     def sample(self, batch_size):
         ########## YOUR CODE HERE (for Task 3) ########## 
+        self.frame += 1
+        beta = min(1.0, self.beta_start + (1.0 - self.beta_start) * (self.frame / self.beta_frames))
+
         curr_len = len(self.buffer)
         prios = self.priorities[:curr_len]
 
@@ -137,14 +144,16 @@ class PrioritizedReplayBuffer:
         indices = np.random.choice(curr_len, batch_size, p=probs)
         samples = [self.buffer[idx] for idx in indices]
 
-        weights = (curr_len * probs[indices]) ** (-self.beta)
+        weights = (curr_len * probs[indices]) ** (-beta)
         weights /= weights.max()
         ########## END OF YOUR CODE (for Task 3) ########## 
         return samples, indices, weights.astype(np.float32)
 
     def update_priorities(self, indices, errors):
         ########## YOUR CODE HERE (for Task 3) ########## 
-        self.priorities[indices] = abs(errors) + 1e-6
+        priorities = abs(errors) + 1e-6
+        self.priorities[indices] = priorities
+        self.max_priority = max(self.max_priority, priorities.max())
         ########## END OF YOUR CODE (for Task 3) ########## 
         return
     
@@ -240,8 +249,7 @@ class DQNAgent:
                     n_step_reward = sum([self.n_step_buffer[i][2] * (self.gamma ** i) for i in range(len(self.n_step_buffer))])
 
                     if self.task == 3:
-                        max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
-                        self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done), max_p)
+                        self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done))
                     else:
                         self.memory.append((origin_state, origin_action, n_step_reward, final_next_state, final_done))
 
@@ -256,8 +264,7 @@ class DQNAgent:
                             n_step_reward = sum([self.n_step_buffer[i][2] * (self.gamma ** i) for i in range(remain_len)])
 
                             if self.task == 3:
-                                max_p = np.max(self.memory.priorities[:len(self.memory.buffer)]) if len(self.memory.buffer) > 0 else 1.0
-                                self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done), max_p)
+                                self.memory.add((origin_state, origin_action, n_step_reward, final_next_state, final_done))
                             else:
                                 self.memory.append((origin_state, origin_action, n_step_reward, final_next_state, final_done))
 
@@ -387,7 +394,7 @@ class DQNAgent:
             td_errors = (target_q_values - q_values).detach().cpu().numpy()
             self.memory.update_priorities(indices, td_errors)
 
-            loss = (weights * F.mse_loss(q_values, target_q_values, reduction='none')).mean()
+            loss = (weights * F.smooth_l1_loss(q_values, target_q_values, reduction='none')).mean()
         else:
             loss = F.mse_loss(q_values, target_q_values)
         
